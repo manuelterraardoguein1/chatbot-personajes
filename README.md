@@ -1,26 +1,69 @@
 # Chatbot de Personajes
 
+Chateá con personajes de ficción (Gandalf, Darth Vader, Yoda, Sherlock Holmes). Las respuestas se generan con un modelo de lenguaje y aparecen palabra por palabra, en tiempo real.
+
+**Demo:** _[agregar link de Vercel después del deploy]_
+
 ## Problema
 
-Chatbot donde el usuario elige un personaje ficticio (ej: Gandalf, Darth Vader) de una lista y conversa con él, con respuestas generadas en tiempo real (streaming) vía un modelo de lenguaje.
+Un modelo de lenguaje "pelado" responde con una voz genérica. Este proyecto le da a cada personaje su propia personalidad a través de un _system prompt_, y le muestra la respuesta al usuario mientras se va generando. Así la conversación se siente fluida, sin tener que esperar varios segundos a que llegue el texto completo.
 
-## Stack y decisiones técnicas
+## Decisiones técnicas
 
-- **Next.js (App Router) + TypeScript**: permite tener frontend y backend (API routes) en un mismo proyecto, sin exponer credenciales al cliente. El ruteo se basa en la estructura de carpetas dentro de `src/app`.
-- **Tailwind CSS v4**: estilos utility-first, configurados directo en `globals.css` (sin `tailwind.config.js`, es el nuevo enfoque CSS-first de la v4).
-- **Groq API**: motor de inferencia para las respuestas del modelo. Se llama desde una API route del servidor, nunca desde el navegador, para no exponer la API key.
-- **Sin base de datos**: la lista de personajes vive en código por ahora; no hay persistencia de conversaciones.
+### Next.js (App Router) + API routes
+
+Frontend y backend viven en el mismo proyecto. La página del chat corre en el navegador, pero la llamada al modelo se hace desde una API route (`src/app/api/chat/route.ts`) que corre en el servidor. Por eso la API key de Groq nunca llega al cliente: si el navegador llamara directo a Groq, cualquiera podría verla en las herramientas de desarrollador.
+
+El ruteo se deduce de la estructura de carpetas: `src/app/chat/[characterId]/page.tsx` atiende URLs como `/chat/gandalf`. Si el `id` no corresponde a ningún personaje, se devuelve un 404.
+
+### Streaming con Groq
+
+- **Del modelo al servidor:** la API route llama a Groq con `stream: true`. En vez de una respuesta completa, recibe un iterador asíncrono de fragmentos (_chunks_), cada uno con unos pocos tokens.
+- **Del servidor al navegador:** la route arma un `ReadableStream` y va encolando cada fragmento a medida que llega de Groq. La respuesta HTTP empieza a enviarse antes de que el modelo termine de generar.
+- **Texto plano en vez de SSE:** el stream es `text/plain` y lleva solo el texto de la respuesta. Como hay un único tipo de dato para mandar, no hace falta el formato de eventos de Server-Sent Events, y el cliente queda más simple.
+- **Modelo:** `openai/gpt-oss-120b` en Groq. Groq ofrece inferencia muy rápida y un plan gratuito. Arrancamos con `llama-3.3-70b-versatile`, pero Groq lo dio de baja y lo cambiamos.
+
+### Manejo de estado
+
+Todo el estado del chat vive en el componente `ChatWindow` con `useState`: la lista de mensajes, el texto del input, si hay una respuesta en curso y un posible error.
+
+- **Mensaje "en construcción":** al enviar, se agregan el mensaje del usuario y un mensaje vacío del asistente. Cada chunk que llega se concatena a ese último mensaje, y la UI se re-renderiza mostrando el texto a medida que crece.
+- **Actualización funcional (`setMessages(prev => ...)`):** los chunks llegan más rápido que los renders de React. Si cada actualización partiera de la variable `messages` del render en que arrancó el envío, todas verían el mismo estado viejo y se pisarían entre sí. Con la forma funcional, cada actualización parte del resultado de la anterior.
+- **Servidor sin estado:** el modelo no recuerda conversaciones anteriores, así que el cliente manda el historial completo en cada request. El servidor no guarda nada. La contra es que el request crece a medida que avanza la conversación, algo aceptable para charlas cortas.
+- **Input bloqueado durante el streaming:** evita que se mezclen dos respuestas en el mismo mensaje.
+
+### Personajes en código, sin base de datos
+
+Los personajes y sus system prompts están en `src/lib/characters.ts`. Con cuatro personajes fijos, una base de datos solo agregaría complejidad. Tampoco se guardan conversaciones: al recargar la página, el chat empieza de cero.
+
+### Tailwind CSS v4
+
+Estilos _utility-first_ configurados directamente en `globals.css`. La v4 no necesita `tailwind.config.js`.
+
+## Estructura
+
+```
+src/
+├── app/
+│   ├── page.tsx                    # Selección de personaje
+│   ├── chat/[characterId]/page.tsx # Página del chat (ruta dinámica)
+│   └── api/chat/route.ts           # API route: llama a Groq y hace streaming
+├── components/
+│   └── ChatWindow.tsx              # UI y estado del chat (componente cliente)
+└── lib/
+    └── characters.ts               # Personajes y system prompts
+```
 
 ## Cómo correrlo localmente
 
+Requisitos: Node.js 20.9 o superior y una API key de Groq (se saca gratis en [console.groq.com/keys](https://console.groq.com/keys)).
+
 ```bash
 npm install
-cp .env.example .env.local   # completar con tu GROQ_API_KEY
+cp .env.example .env.local   # completar GROQ_API_KEY
 npm run dev
 ```
 
 Abrir [http://localhost:3000](http://localhost:3000).
 
-## Demo
-
-_Pendiente de deploy en Vercel._
+`.env.local` está en `.gitignore`, así que la key nunca se commitea.
