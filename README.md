@@ -2,7 +2,7 @@
 
 Chateá con personajes de ficción (Gandalf, Darth Vader, Yoda, Sherlock Holmes). Las respuestas se generan con un modelo de lenguaje y aparecen palabra por palabra, en tiempo real.
 
-**Demo:** _[agregar link de Vercel después del deploy]_
+**Demo:** [chatbot-personajes.vercel.app](https://chatbot-personajes.vercel.app)
 
 ## Problema
 
