@@ -32,6 +32,27 @@ Todo el estado del chat vive en el componente `ChatWindow` con `useState`: la li
 - **Servidor sin estado:** el modelo no recuerda conversaciones anteriores, así que el cliente manda el historial completo en cada request. El servidor no guarda nada. La contra es que el request crece a medida que avanza la conversación, algo aceptable para charlas cortas.
 - **Input bloqueado durante el streaming:** evita que se mezclen dos respuestas en el mismo mensaje.
 
+### Manejo de errores
+
+Con streaming, el status HTTP (200) sale junto con el primer chunk y después ya no se puede cambiar. Por eso hay dos caminos:
+
+- **Antes de empezar a streamear**, la API route responde con un status y un código, por ejemplo `504 { "error": "timeout" }`. El cliente traduce cada código a un mensaje en español, y el detalle técnico queda solo en los logs del servidor.
+- **En medio del stream**, la única forma de avisar es abortarlo con `controller.error()` en vez de cerrarlo. Así, en el cliente `reader.read()` lanza una excepción y una respuesta cortada no se confunde con una terminada.
+
+Casos cubiertos:
+
+| Situación | Qué hace el servidor | Qué ve el usuario |
+|---|---|---|
+| Groq no empieza a responder | Timeout de 15s y 1 reintento (el SDK trae 60s y 2 reintentos por defecto), después `504` | "Tardó demasiado", con su texto de vuelta en el input |
+| Groq se traba a mitad de respuesta | Un _watchdog_ que se reinicia con cada chunk corta el stream tras 15s de silencio. El timeout del SDK solo cubre la espera hasta que llega el primer byte | Conserva lo que ya leyó, marcado como "respuesta interrumpida" |
+| API key inválida o ausente | Loguea la causa real y responde `500` sin exponer detalles | "El servicio no está disponible" |
+| Límite de uso de Groq (429) | Responde `429` | "Demasiados mensajes, esperá un momento" |
+| El usuario cierra la pestaña | Aborta el pedido a Groq para no gastar cuota en tokens que nadie va a leer | — |
+
+Cuando el error llega antes de cualquier texto, se sacan de la conversación el mensaje del usuario y la burbuja vacía, y el texto vuelve al input. Así se puede reenviar sin que quede duplicado en el historial.
+
+Un detalle del SDK de Groq: cuando se aborta un stream, el `for await` termina en silencio en vez de lanzar una excepción. Por eso, después del loop, la route revisa si el watchdog se disparó y en ese caso lanza el error ella misma.
+
 ### Personajes en código, sin base de datos
 
 Los personajes y sus system prompts están en `src/lib/characters.ts`. Con cuatro personajes fijos, una base de datos solo agregaría complejidad. Tampoco se guardan conversaciones: al recargar la página, el chat empieza de cero.
