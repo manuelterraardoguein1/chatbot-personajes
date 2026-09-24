@@ -2,8 +2,21 @@
 
 import { useState } from "react";
 import type { Character } from "@/lib/characters";
+import type { ChatErrorCode } from "@/app/api/chat/route";
 
-type Message = { role: "user" | "assistant"; content: string };
+type Message = {
+  role: "user" | "assistant";
+  content: string;
+  interrupted?: boolean;
+};
+
+const DEFAULT_ERROR = "Algo salió mal al hablar con el personaje. Probá de nuevo.";
+const ERROR_MESSAGES: Partial<Record<ChatErrorCode, string>> = {
+  timeout: "El personaje tardó demasiado en responder. Probá de nuevo.",
+  rate_limit: "Demasiados mensajes seguidos. Esperá un momento y probá de nuevo.",
+  config: "El servicio no está disponible en este momento. Probá más tarde.",
+};
+const INTERRUPTED_ERROR = "La respuesta se cortó antes de terminar. Probá de nuevo.";
 
 export default function ChatWindow({ character }: { character: Character }) {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -22,14 +35,22 @@ export default function ChatWindow({ character }: { character: Character }) {
     setInput("");
     setIsStreaming(true);
 
+    let errorCode: ChatErrorCode | undefined;
+    let receivedText = false;
+
     try {
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ characterId: character.id, messages: history }),
+        body: JSON.stringify({
+          characterId: character.id,
+          messages: history.map(({ role, content }) => ({ role, content })),
+        }),
       });
 
       if (!response.ok || !response.body) {
+        const data = await response.json().catch(() => null);
+        errorCode = data?.error;
         throw new Error(`Request failed with status ${response.status}`);
       }
 
@@ -41,6 +62,7 @@ export default function ChatWindow({ character }: { character: Character }) {
         if (done) break;
 
         const chunkText = decoder.decode(value, { stream: true });
+        if (chunkText) receivedText = true;
         setMessages((prev) => {
           const updated = [...prev];
           const last = updated[updated.length - 1];
@@ -52,7 +74,21 @@ export default function ChatWindow({ character }: { character: Character }) {
         });
       }
     } catch {
-      setError("Algo salió mal al hablar con el personaje. Probá de nuevo.");
+      if (receivedText) {
+        // Keep the partial reply the user already read, but flag it.
+        setMessages((prev) => {
+          const updated = [...prev];
+          updated[updated.length - 1] = { ...updated[updated.length - 1], interrupted: true };
+          return updated;
+        });
+        setError(INTERRUPTED_ERROR);
+      } else {
+        // Nothing arrived: drop the user message and the empty bubble, and
+        // put the text back in the input so it can be resent as is.
+        setMessages((prev) => prev.slice(0, -2));
+        setInput(trimmed);
+        setError((errorCode && ERROR_MESSAGES[errorCode]) || DEFAULT_ERROR);
+      }
     } finally {
       setIsStreaming(false);
     }
@@ -76,6 +112,9 @@ export default function ChatWindow({ character }: { character: Character }) {
             }`}
           >
             {message.content || (isStreaming && index === messages.length - 1 ? "…" : "")}
+            {message.interrupted && (
+              <span className="mt-1 block text-xs italic text-zinc-500">(respuesta interrumpida)</span>
+            )}
           </div>
         ))}
         {error && <p className="text-center text-sm text-red-500">{error}</p>}
